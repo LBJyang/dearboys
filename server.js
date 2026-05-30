@@ -18,17 +18,8 @@ const API_KEY = process.env.GEMINI_API_KEY;
 const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const PORT = process.env.PORT || 5173;
 
-// --- 本地数据存储（JSON 文件）---
-const DATA_DIR = path.join(__dirname, "data");
-const DB_FILE = path.join(DATA_DIR, "records.json");
-function loadDB() {
-  try { return JSON.parse(fs.readFileSync(DB_FILE, "utf8")); }
-  catch { return { children: {}, records: [] }; }
-}
-function saveDB(db) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
-}
+// --- 存储层：Postgres（持久化）或本地文件，见 storage.js ---
+const storage = require("./storage");
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
 // --- 批改提示词：内置防幻觉策略 + 全题打知识点标签 ---
@@ -207,28 +198,26 @@ const server = http.createServer(async (req, res) => {
 
     // 孩子档案
     if (req.method === "GET" && u.pathname === "/api/children") {
-      return json(res, 200, { ok: true, children: loadDB().children });
+      return json(res, 200, { ok: true, children: await storage.getChildren() });
     }
     if (req.method === "POST" && u.pathname === "/api/children") {
       const meta = JSON.parse(await readBody(req));
-      const db = loadDB(); const id = uid();
-      db.children[id] = { id, name: meta.name || "孩子", grade: meta.grade || "", age: meta.age || "", country: meta.country || "" };
-      saveDB(db);
-      return json(res, 200, { ok: true, child: db.children[id] });
+      const child = { id: uid(), name: meta.name || "孩子", grade: meta.grade || "", age: meta.age || "", country: meta.country || "" };
+      await storage.addChild(child);
+      return json(res, 200, { ok: true, child });
     }
 
     // 批改 + 存档
     if (req.method === "POST" && u.pathname === "/api/grade") {
       if (!API_KEY) throw new Error("未配置 GEMINI_API_KEY，请编辑 .env");
       const { childId, image, mimeType, subject, notes } = JSON.parse(await readBody(req));
-      const db = loadDB();
-      const child = db.children[childId];
+      const child = await storage.getChild(childId);
       if (!child) throw new Error("请先选择或创建孩子");
       const parts = [{ text: gradePrompt({ subject, notes, grade: child.grade, age: child.age, country: child.country }) }];
       if (image) parts.push({ inline_data: { mime_type: mimeType || "image/jpeg", data: image } });
       const result = await callGemini(parts);
       const record = { id: uid(), childId, date: new Date().toISOString(), subject: result.subject || subject || "", ...result };
-      db.records.push(record); saveDB(db);
+      await storage.addRecord(record);
       return json(res, 200, { ok: true, result, recordId: record.id });
     }
 
@@ -236,8 +225,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && u.pathname === "/api/grade-video") {
       if (!API_KEY) throw new Error("未配置 GEMINI_API_KEY");
       const { childId, video, mimeType, subject, notes } = JSON.parse(await readBody(req));
-      const db = loadDB();
-      const child = db.children[childId];
+      const child = await storage.getChild(childId);
       if (!child) throw new Error("请先选择或创建孩子");
       if (!video) throw new Error("没有收到视频");
       const buffer = Buffer.from(video, "base64");
@@ -249,8 +237,9 @@ const server = http.createServer(async (req, res) => {
         );
         // 每页存为一条记录，进入趋势
         const now = new Date();
-        (result.pages || []).forEach((p, i) => {
-          db.records.push({
+        for (let i = 0; i < (result.pages || []).length; i++) {
+          const p = result.pages[i];
+          await storage.addRecord({
             id: uid(), childId,
             date: new Date(now.getTime() + i).toISOString(),
             subject: p.subject || subject || "",
@@ -258,8 +247,7 @@ const server = http.createServer(async (req, res) => {
             total: p.total, correct: p.correct, wrong: p.wrong, score: p.score,
             questions: p.questions || [], knowledge_gaps: p.knowledge_gaps || [], remediation: p.remediation || [],
           });
-        });
-        saveDB(db);
+        }
         return json(res, 200, { ok: true, result });
       } finally {
         deleteGeminiFile(file.name); // 用完即删，减少留存
@@ -269,7 +257,7 @@ const server = http.createServer(async (req, res) => {
     // 历史 + 趋势统计（代码算）
     if (req.method === "GET" && u.pathname === "/api/history") {
       const childId = u.searchParams.get("childId");
-      const recs = loadDB().records.filter((r) => r.childId === childId);
+      const recs = await storage.getRecords(childId);
       return json(res, 200, { ok: true, records: recs, stats: computeStats(recs) });
     }
 
@@ -277,11 +265,11 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && u.pathname === "/api/trend") {
       if (!API_KEY) throw new Error("未配置 GEMINI_API_KEY");
       const childId = u.searchParams.get("childId");
-      const db = loadDB();
-      const recs = db.records.filter((r) => r.childId === childId);
+      const recs = await storage.getRecords(childId);
       if (recs.length < 2) return json(res, 200, { ok: true, trend: null, note: "至少需要 2 次作业才能分析趋势" });
       const stats = computeStats(recs);
-      const trend = await callGemini([{ text: trendPrompt(db.children[childId] || {}, statsToText(stats)) }]);
+      const child = await storage.getChild(childId);
+      const trend = await callGemini([{ text: trendPrompt(child || {}, statsToText(stats)) }]);
       return json(res, 200, { ok: true, trend, stats });
     }
 
@@ -291,8 +279,10 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, "0.0.0.0", () => {
+server.listen(PORT, "0.0.0.0", async () => {
   console.log(`\n  ✅ 判作业原型(聚焦版)：http://localhost:${PORT}`);
-  console.log(`  模型：${MODEL}  | 数据：${DB_FILE}`);
-  console.log(`  API key：${API_KEY ? API_KEY.slice(0, 8) + "…" : "❌ 未配置"}\n`);
+  console.log(`  模型：${MODEL}`);
+  console.log(`  API key：${API_KEY ? API_KEY.slice(0, 8) + "…" : "❌ 未配置"}`);
+  try { await storage.initStorage(); } catch (e) { console.error("  ⚠️ 存储初始化失败：", e.message); }
+  console.log("");
 });

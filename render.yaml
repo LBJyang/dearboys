@@ -5,10 +5,12 @@ services:
     name: homework-grader
     runtime: node
     plan: free
-    buildCommand: ""
+    buildCommand: npm install
     startCommand: node server.js
     envVars:
       - key: GEMINI_API_KEY
         sync: false          # 在 Render 控制台手动填，不进仓库
       - key: GEMINI_MODEL
         value: gemini-3.5-flash
+      - key: DATABASE_URL
+        sync: false          # 填 Neon 的 Postgres 连接串，不进仓库
