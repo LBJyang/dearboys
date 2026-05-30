@@ -4,3 +4,6 @@ node_modules/
 data/
 sample_homework*.png
 hw_video.mp4
+
+.DS_Store
+**/.DS_Store
