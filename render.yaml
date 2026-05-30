@@ -1,0 +1,14 @@
+# Render.com 部署配置（一键创建服务）
+# 部署后在 Render 控制台把 GEMINI_API_KEY 填进环境变量，不要写进代码
+services:
+  - type: web
+    name: homework-grader
+    runtime: node
+    plan: free
+    buildCommand: ""
+    startCommand: node server.js
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false          # 在 Render 控制台手动填，不进仓库
+      - key: GEMINI_MODEL
+        value: gemini-3.5-flash

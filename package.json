@@ -1,0 +1,13 @@
+{
+  "name": "homework-grader",
+  "version": "0.1.0",
+  "private": true,
+  "description": "拍照/录视频自动批改作业并跟踪进步退步的原型",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

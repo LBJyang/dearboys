@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>判作业 · 聚焦原型</title>
+<link rel="manifest" href="/manifest.json" />
+<meta name="theme-color" content="#3b6cff" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="判作业" />
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --accent:#3b6cff; --muted:#6b7280; --ok:#16a34a; --bad:#dc2626; --line:#e5e7eb; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; background:var(--bg); color:#111; }
+  header { padding:18px; text-align:center; }
+  header h1 { margin:0; font-size:19px; }
+  header p { margin:4px 0 0; color:var(--muted); font-size:13px; }
+  .wrap { max-width:760px; margin:0 auto; padding:0 16px 60px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px; margin-bottom:14px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  label { font-size:12px; color:var(--muted); display:block; margin-bottom:3px; }
+  input, textarea, select { width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:10px; font-size:14px; font-family:inherit; }
+  textarea { min-height:48px; resize:vertical; }
+  .grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+  button { padding:10px 14px; border:none; border-radius:10px; font-size:14px; cursor:pointer; background:#eef1f6; }
+  button.go { background:var(--accent); color:#fff; width:100%; padding:13px; font-size:15px; margin-top:10px; }
+  button.go:disabled { opacity:.5; cursor:wait; }
+  .tabs { display:flex; gap:8px; margin:4px 0 14px; }
+  .tab { flex:1; text-align:center; padding:10px; border:1px solid var(--line); border-radius:12px; background:var(--card); cursor:pointer; font-size:14px; }
+  .tab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .drop { border:2px dashed var(--line); border-radius:12px; padding:16px; text-align:center; color:var(--muted); cursor:pointer; font-size:13px; margin-top:10px; }
+  .drop img { max-height:200px; max-width:100%; border-radius:8px; margin-top:8px; }
+  .stat { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+  .pill { background:#f1f3f9; border-radius:10px; padding:7px 11px; font-size:13px; }
+  .pill b { font-size:17px; display:block; }
+  .q { border-top:1px solid var(--line); padding:9px 0; font-size:14px; }
+  .badge { font-size:12px; padding:2px 8px; border-radius:6px; color:#fff; }
+  .badge.ok{background:var(--ok)} .badge.bad{background:var(--bad)}
+  .sub { color:var(--muted); font-size:13px; margin-top:3px; }
+  h3 { font-size:15px; margin:16px 0 8px; }
+  ul { margin:4px 0; padding-left:20px; font-size:14px; } li { margin:3px 0; }
+  .err { color:var(--bad); } .spin { text-align:center; color:var(--muted); padding:22px; }
+  .verdict { font-size:22px; font-weight:700; }
+  .v-up{color:var(--ok)} .v-down{color:var(--bad)}
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td,th { border-bottom:1px solid var(--line); padding:6px 4px; text-align:left; }
+  .small { font-size:12px; color:var(--muted); }
+  .bar { height:6px; background:var(--line); border-radius:3px; overflow:hidden; }
+  .bar > i { display:block; height:100%; background:var(--accent); }
+</style>
+</head>
+<body>
+<header><h1>📝 判作业 · 聚焦原型</h1><p>批改 → 存档 → 看进步退步</p></header>
+<div class="wrap">
+  <!-- 孩子档案 -->
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <div style="flex:1;min-width:160px"><label>选择孩子</label>
+        <select id="childSel"></select></div>
+      <button id="addChildBtn">+ 新建孩子</button>
+    </div>
+    <div id="addChild" style="display:none;margin-top:10px">
+      <div class="grid">
+        <div><label>姓名</label><input id="cName" placeholder="如 小明"/></div>
+        <div><label>年级</label><input id="cGrade" placeholder="如 二年级"/></div>
+        <div><label>年龄</label><input id="cAge" placeholder="如 8"/></div>
+      </div>
+      <div style="margin-top:8px"><label>国籍</label><input id="cCountry" placeholder="如 中国"/></div>
+      <button class="go" id="saveChild">保存孩子</button>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-v="grade">批改新作业</div>
+    <div class="tab" data-v="trend">📈 历史与趋势</div>
+  </div>
+
+  <!-- 批改 -->
+  <div id="gradeView">
+    <div class="card">
+      <div><label>学科</label><input id="subject" placeholder="如 数学"/></div>
+      <div style="margin-top:8px"><label>本次补充(可选)</label><textarea id="notes" placeholder="如：这是单元测验"></textarea></div>
+
+      <div class="tabs" style="margin-top:12px">
+        <div class="tab active" data-cap="photo">📷 拍照(单页)</div>
+        <div class="tab" data-cap="video">🎥 录视频(多页)</div>
+      </div>
+
+      <!-- 照片 -->
+      <div id="capPhoto">
+        <div class="drop" id="drop">点击拍照 / 上传作业照片
+          <input type="file" id="file" accept="image/*" capture="environment" style="display:none"/><div id="preview"></div></div>
+      </div>
+      <!-- 视频 -->
+      <div id="capVideo" style="display:none">
+        <div class="drop" id="vdrop">点击录制 / 上传作业视频
+          <div class="small" style="margin-top:6px">翻页时每页停稳 1–2 秒、光线充足，会自动分页批改</div>
+          <input type="file" id="vfile" accept="video/*" capture="environment" style="display:none"/><div id="vpreview"></div></div>
+      </div>
+
+      <button class="go" id="goBtn">开始批改</button>
+    </div>
+    <div id="gradeOut"></div>
+  </div>
+
+  <!-- 趋势 -->
+  <div id="trendView" style="display:none">
+    <div id="trendOut" class="card"><div class="small">选择孩子后这里显示历次成绩和进步/退步分析。</div></div>
+  </div>
+</div>
+
+<script>
+let imageB64=null, imageMime=null, videoB64=null, videoMime=null, capMode="photo", children={}, curChild=null, view="grade";
+const $=id=>document.getElementById(id);
+const val=id=>$(id).value.trim();
+
+async function loadChildren(){
+  const d=await (await fetch("/api/children")).json(); children=d.children||{};
+  const sel=$("childSel"); sel.innerHTML="";
+  const ids=Object.keys(children);
+  if(!ids.length){ sel.innerHTML='<option value="">（请先新建孩子）</option>'; curChild=null; }
+  else { ids.forEach(id=>{ const o=document.createElement("option"); o.value=id; o.textContent=`${children[id].name} ${children[id].grade||""}`; sel.appendChild(o); }); curChild=sel.value=ids[0]; }
+}
+$("childSel").onchange=e=>{ curChild=e.target.value; if(view==="trend") loadTrend(); };
+$("addChildBtn").onclick=()=>{ const a=$("addChild"); a.style.display=a.style.display==="none"?"block":"none"; };
+$("saveChild").onclick=async()=>{
+  const body={name:val("cName"),grade:val("cGrade"),age:val("cAge"),country:val("cCountry")};
+  const d=await (await fetch("/api/children",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json();
+  if(d.ok){ $("addChild").style.display="none"; ["cName","cGrade","cAge","cCountry"].forEach(i=>$(i).value=""); await loadChildren(); $("childSel").value=d.child.id; curChild=d.child.id; }
+};
+
+// 顶部视图切换（批改 / 趋势）
+document.querySelectorAll(".tab[data-v]").forEach(t=>t.onclick=()=>{
+  view=t.dataset.v;
+  document.querySelectorAll(".tab[data-v]").forEach(x=>x.classList.toggle("active",x===t));
+  $("gradeView").style.display=view==="grade"?"block":"none";
+  $("trendView").style.display=view==="trend"?"block":"none";
+  if(view==="trend") loadTrend();
+});
+// 拍照 / 视频 切换
+document.querySelectorAll(".tab[data-cap]").forEach(t=>t.onclick=()=>{
+  capMode=t.dataset.cap;
+  document.querySelectorAll(".tab[data-cap]").forEach(x=>x.classList.toggle("active",x===t));
+  $("capPhoto").style.display=capMode==="photo"?"block":"none";
+  $("capVideo").style.display=capMode==="video"?"block":"none";
+});
+
+const drop=$("drop"), file=$("file");
+drop.onclick=()=>file.click();
+file.onchange=()=>{ const f=file.files[0]; if(!f)return; const r=new FileReader(); r.onload=()=>{ imageB64=r.result.split(",")[1]; imageMime=f.type; $("preview").innerHTML=`<img src="${r.result}">`; }; r.readAsDataURL(f); };
+
+const vdrop=$("vdrop"), vfile=$("vfile");
+vdrop.onclick=()=>vfile.click();
+vfile.onchange=()=>{ const f=vfile.files[0]; if(!f)return;
+  const mb=(f.size/1048576).toFixed(1);
+  const r=new FileReader(); r.onload=()=>{ videoB64=r.result.split(",")[1]; videoMime=f.type;
+    $("vpreview").innerHTML=`<video src="${r.result}" controls style="max-height:200px;max-width:100%;border-radius:8px;margin-top:8px"></video><div class="small">已选视频 ${mb}MB</div>`; };
+  r.readAsDataURL(f);
+};
+
+$("goBtn").onclick=async()=>{
+  if(!curChild){ alert("请先新建/选择孩子"); return; }
+  const btn=$("goBtn");
+  if(capMode==="photo"){
+    if(!imageB64){ alert("请先拍照/上传作业照片"); return; }
+    btn.disabled=true; btn.textContent="批改中…";
+    $("gradeOut").innerHTML='<div class="card spin">⏳ 正在批改并存档…</div>';
+    try{
+      const d=await (await fetch("/api/grade",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({childId:curChild,image:imageB64,mimeType:imageMime,subject:val("subject"),notes:val("notes")})})).json();
+      if(!d.ok) throw new Error(d.error);
+      renderGrade(d.result);
+    }catch(e){ $("gradeOut").innerHTML=`<div class="card err">出错：${e.message}</div>`; }
+  } else {
+    if(!videoB64){ alert("请先录制/上传作业视频"); return; }
+    btn.disabled=true; btn.textContent="处理视频中…";
+    $("gradeOut").innerHTML='<div class="card spin">⏳ 上传视频→分页批改，视频较慢请稍候…</div>';
+    try{
+      const d=await (await fetch("/api/grade-video",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({childId:curChild,video:videoB64,mimeType:videoMime,subject:val("subject"),notes:val("notes")})})).json();
+      if(!d.ok) throw new Error(d.error);
+      renderVideoGrade(d.result);
+    }catch(e){ $("gradeOut").innerHTML=`<div class="card err">出错：${e.message}</div>`; }
+  }
+  btn.disabled=false; btn.textContent="开始批改";
+};
+
+function renderVideoGrade(r){
+  let h=`<div class="card"><p><b>视频识别出 ${r.pages_detected ?? (r.pages||[]).length} 页作业</b>，已逐页批改并存档：</p></div>`;
+  (r.pages||[]).forEach(p=>{ h+=renderGradeHTML(p, `第 ${p.page} 页`); });
+  $("gradeOut").innerHTML=h;
+}
+
+function renderGradeHTML(r, title){
+  let h=`<div class="card">${title?`<h3 style="margin-top:0">${title}</h3>`:""}<div class="stat">
+    <div class="pill">学科<b>${r.subject||"-"}</b></div>
+    <div class="pill">分数<b>${r.score||"-"}</b></div>
+    <div class="pill">总题<b>${r.total??"-"}</b></div>
+    <div class="pill">对<b style="color:var(--ok)">${r.correct??"-"}</b></div>
+    <div class="pill">错<b style="color:var(--bad)">${r.wrong??"-"}</b></div></div>`;
+  (r.questions||[]).forEach(q=>{ h+=`<div class="q"><b>第 ${q.no} 题</b> <span class="badge ${q.is_correct?"ok":"bad"}">${q.is_correct?"✓":"✗"}</span>
+    <div class="sub">作答：${q.student_answer||"-"} ｜ 正确：${q.correct_answer||"-"} ｜ 知识点：${q.knowledge_point||"-"}</div>
+    ${q.is_correct?"":`<div class="sub">类型：${q.error_type||"-"}　${q.explanation||""}</div>`}</div>`; });
+  h+=list("薄弱知识点",r.knowledge_gaps)+list("弥补建议",r.remediation)+"</div>";
+  return h;
+}
+function renderGrade(r){
+  $("gradeOut").innerHTML=renderGradeHTML(r,"")+'<p class="small" style="text-align:center">✅ 已存档，去"历史与趋势"看走势。</p>';
+}
+
+async function loadTrend(){
+  if(!curChild){ $("trendOut").innerHTML='<div class="small">请先新建/选择孩子。</div>'; return; }
+  $("trendOut").innerHTML='<div class="spin">⏳ 加载历史并分析…</div>';
+  const hist=await (await fetch("/api/history?childId="+curChild)).json();
+  const recs=hist.records||[];
+  if(!recs.length){ $("trendOut").innerHTML='<div class="small">还没有批改记录，先去批改几次作业。</div>'; return; }
+  let h=`<h3>历次成绩（${recs.length} 次）</h3><table><tr><th>日期</th><th>学科</th><th>正确率</th><th>分数</th></tr>`;
+  hist.stats.scoreSeries.forEach(s=>{ h+=`<tr><td>${s.date}</td><td>-</td><td>${s.rate??"-"}%</td><td>${s.correct}/${s.total}</td></tr>`; });
+  h+="</table>";
+  if(hist.stats.points.length){ h+=`<h3>各知识点 早期→近期 正确率</h3>`;
+    hist.stats.points.forEach(p=>{ const r=p.recent, e=p.early; const col=(r!=null&&e!=null)?(r>=e?"var(--ok)":"var(--bad)"):"var(--muted)";
+      h+=`<div class="q"><div class="row" style="justify-content:space-between"><span>${p.point}</span><span style="color:${col}">${e??"无"}% → ${r??"无"}%</span></div><div class="bar"><i style="width:${r??0}%;background:${col}"></i></div></div>`; }); }
+  $("trendOut").innerHTML=h+'<div class="spin">⏳ 生成进步/退步解读…</div>';
+  // LLM 趋势解读
+  const t=await (await fetch("/api/trend?childId="+curChild)).json();
+  if(t.trend){ const v=t.trend.verdict||""; const cls=v.includes("进步")?"v-up":v.includes("退步")?"v-down":"";
+    let th=`<h3>趋势解读</h3><div class="verdict ${cls}">${v}</div><p>${t.trend.overall||""}</p>`;
+    if((t.trend.by_point||[]).length){ th+="<ul>"+t.trend.by_point.map(b=>`<li><b>${b.point}</b>（${b.trend}）：${b.detail||""}</li>`).join("")+"</ul>"; }
+    th+=list("原因分析",t.trend.reasons)+list("下一步建议",t.trend.suggestions);
+    $("trendOut").innerHTML=h+th;
+  } else { $("trendOut").innerHTML=h+`<p class="small">${t.note||"暂无法生成解读"}</p>`; }
+}
+function list(title,arr){ if(!arr||!arr.length)return""; return `<h3>${title}</h3><ul>`+arr.map(x=>`<li>${typeof x==="string"?x:JSON.stringify(x)}</li>`).join("")+"</ul>"; }
+
+loadChildren();
+</script>
+</body>
+</html>
