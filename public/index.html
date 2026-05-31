@@ -57,9 +57,11 @@
   <!-- 孩子档案 -->
   <div class="card">
     <div class="row" style="justify-content:space-between">
-      <div style="flex:1;min-width:160px"><label>选择孩子</label>
+      <div style="flex:1;min-width:140px"><label>选择孩子</label>
         <select id="childSel"></select></div>
-      <button id="addChildBtn">+ 新建孩子</button>
+      <button id="editChildBtn" title="改名/编辑">✏️</button>
+      <button id="delChildBtn" title="删除">🗑️</button>
+      <button id="addChildBtn">+ 新建</button>
     </div>
     <div id="addChild" style="display:none;margin-top:10px">
       <div class="grid">
@@ -116,19 +118,39 @@ let imageB64=null, imageMime=null, videoB64=null, videoMime=null, capMode="photo
 const $=id=>document.getElementById(id);
 const val=id=>$(id).value.trim();
 
-async function loadChildren(){
+async function loadChildren(prefer){
   const d=await (await fetch("/api/children")).json(); children=d.children||{};
   const sel=$("childSel"); sel.innerHTML="";
   const ids=Object.keys(children);
   if(!ids.length){ sel.innerHTML='<option value="">（请先新建孩子）</option>'; curChild=null; }
-  else { ids.forEach(id=>{ const o=document.createElement("option"); o.value=id; o.textContent=`${children[id].name} ${children[id].grade||""}`; sel.appendChild(o); }); curChild=sel.value=ids[0]; }
+  else { ids.forEach(id=>{ const o=document.createElement("option"); o.value=id; o.textContent=`${children[id].name} ${children[id].grade||""}`; sel.appendChild(o); });
+    curChild = (prefer && children[prefer]) ? prefer : ids[0]; sel.value=curChild; }
 }
 $("childSel").onchange=e=>{ curChild=e.target.value; if(view==="trend") loadTrend(); };
-$("addChildBtn").onclick=()=>{ const a=$("addChild"); a.style.display=a.style.display==="none"?"block":"none"; };
+
+let editingId=null;
+function openChildForm(edit){
+  editingId = edit ? curChild : null;
+  const c = edit ? children[curChild] : {name:"",grade:"",age:"",country:""};
+  $("cName").value=c.name||""; $("cGrade").value=c.grade||""; $("cAge").value=c.age||""; $("cCountry").value=c.country||"";
+  $("saveChild").textContent = edit ? "保存修改" : "保存孩子";
+  $("addChild").style.display="block";
+}
+$("addChildBtn").onclick=()=>{ if($("addChild").style.display==="block" && !editingId){ $("addChild").style.display="none"; } else { openChildForm(false); } };
+$("editChildBtn").onclick=()=>{ if(!curChild){ alert("先选一个孩子"); return; } openChildForm(true); };
+$("delChildBtn").onclick=async()=>{
+  if(!curChild){ alert("先选一个孩子"); return; }
+  if(!confirm(`确定删除「${children[curChild].name}」？TA 的所有批改记录也会一起删除，不可恢复。`)) return;
+  const d=await (await fetch("/api/children/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:curChild})})).json();
+  if(d.ok){ await loadChildren(); if(view==="trend") loadTrend(); $("gradeOut").innerHTML=""; } else alert("删除失败："+d.error);
+};
 $("saveChild").onclick=async()=>{
   const body={name:val("cName"),grade:val("cGrade"),age:val("cAge"),country:val("cCountry")};
-  const d=await (await fetch("/api/children",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json();
-  if(d.ok){ $("addChild").style.display="none"; ["cName","cGrade","cAge","cCountry"].forEach(i=>$(i).value=""); await loadChildren(); $("childSel").value=d.child.id; curChild=d.child.id; }
+  const url = editingId ? "/api/children/update" : "/api/children";
+  if(editingId) body.id=editingId;
+  const d=await (await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json();
+  if(d.ok){ $("addChild").style.display="none"; const keep=d.child.id; editingId=null; await loadChildren(keep); $("childSel").value=keep; curChild=keep; if(view==="trend") loadTrend(); }
+  else alert("保存失败："+d.error);
 };
 
 // 顶部视图切换（批改 / 趋势）

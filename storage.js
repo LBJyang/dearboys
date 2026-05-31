@@ -57,6 +57,32 @@ async function addChild(child) {
   }
   const db = fileLoad(); db.children[child.id] = child; fileSave(db); return child;
 }
+async function updateChild(id, fields) {
+  if (pool) {
+    const cur = await getChild(id);
+    if (!cur) return null;
+    const { id: _omit, ...rest } = { ...cur, ...fields };
+    await pool.query("UPDATE children SET data = $2 WHERE id = $1", [id, rest]);
+    return { id, ...rest };
+  }
+  const db = fileLoad();
+  if (!db.children[id]) return null;
+  db.children[id] = { ...db.children[id], ...fields, id };
+  fileSave(db);
+  return db.children[id];
+}
+async function deleteChild(id) {
+  if (pool) {
+    await pool.query("DELETE FROM records WHERE child_id = $1", [id]);
+    await pool.query("DELETE FROM children WHERE id = $1", [id]);
+    return true;
+  }
+  const db = fileLoad();
+  delete db.children[id];
+  db.records = db.records.filter((r) => r.childId !== id);
+  fileSave(db);
+  return true;
+}
 async function addRecord(rec) {
   if (pool) {
     const { id, childId, date, ...data } = rec;
@@ -73,4 +99,4 @@ async function getRecords(childId) {
   return fileLoad().records.filter((r) => r.childId === childId);
 }
 
-module.exports = { initStorage, getMode, getChildren, getChild, addChild, addRecord, getRecords };
+module.exports = { initStorage, getMode, getChildren, getChild, addChild, updateChild, deleteChild, addRecord, getRecords };

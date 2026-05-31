@@ -211,6 +211,19 @@ const server = http.createServer(async (req, res) => {
       await storage.addChild(child);
       return json(res, 200, { ok: true, child });
     }
+    if (req.method === "POST" && u.pathname === "/api/children/update") {
+      const { id, name, grade, age, country } = JSON.parse(await readBody(req));
+      if (!id) throw new Error("缺少 id");
+      const child = await storage.updateChild(id, { name, grade, age, country });
+      if (!child) throw new Error("孩子不存在");
+      return json(res, 200, { ok: true, child });
+    }
+    if (req.method === "POST" && u.pathname === "/api/children/delete") {
+      const { id } = JSON.parse(await readBody(req));
+      if (!id) throw new Error("缺少 id");
+      await storage.deleteChild(id);
+      return json(res, 200, { ok: true });
+    }
 
     // 批改 + 存档
     if (req.method === "POST" && u.pathname === "/api/grade") {
