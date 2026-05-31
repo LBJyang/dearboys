@@ -196,6 +196,11 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    // 健康检查：报告存储模式、模型、key 是否配置（用于确认线上配置）
+    if (req.method === "GET" && u.pathname === "/api/health") {
+      return json(res, 200, { ok: true, storage: storage.getMode(), model: MODEL, hasKey: !!API_KEY });
+    }
+
     // 孩子档案
     if (req.method === "GET" && u.pathname === "/api/children") {
       return json(res, 200, { ok: true, children: await storage.getChildren() });

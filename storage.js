@@ -4,6 +4,8 @@ const path = require("path");
 
 const DATABASE_URL = process.env.DATABASE_URL;
 let pool = null;
+let mode = "file";
+function getMode() { return mode; }
 
 const DATA_DIR = path.join(__dirname, "data");
 const DB_FILE = path.join(DATA_DIR, "records.json");
@@ -26,6 +28,7 @@ async function initStorage() {
   await pool.query(`CREATE TABLE IF NOT EXISTS children (id TEXT PRIMARY KEY, data JSONB NOT NULL)`);
   await pool.query(`CREATE TABLE IF NOT EXISTS records (id TEXT PRIMARY KEY, child_id TEXT NOT NULL, date TIMESTAMPTZ NOT NULL, data JSONB NOT NULL)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_records_child ON records (child_id)`);
+  mode = "postgres";
   console.log("  存储：Postgres 数据库（持久化）");
   return "postgres";
 }
@@ -70,4 +73,4 @@ async function getRecords(childId) {
   return fileLoad().records.filter((r) => r.childId === childId);
 }
 
-module.exports = { initStorage, getChildren, getChild, addChild, addRecord, getRecords };
+module.exports = { initStorage, getMode, getChildren, getChild, addChild, addRecord, getRecords };
