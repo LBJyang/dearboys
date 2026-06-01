@@ -213,26 +213,49 @@ vfile.onchange=()=>{ const f=vfile.files[0]; if(!f)return;
   r.readAsDataURL(f);
 };
 
+// 批改单张(不入库)，遇到模型繁忙/限流/网络失败自动重试
+async function gradePageWithRetry(img, attempt=0){
+  try{
+    const body={childId:curChild,image:img.data,mimeType:img.mimeType,subject:val("subject"),notes:val("notes"),store:false};
+    const r=await fetch("/api/grade",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const d=await r.json();
+    if(!d.ok) throw new Error(d.error||"批改失败");
+    return d.result;
+  }catch(e){
+    const msg=String(e.message||e);
+    const retriable=/Load failed|Failed to fetch|high demand|RESOURCE_EXHAUSTED|rate|quota|429|503|overload|UNAVAILABLE|temporar|busy/i.test(msg);
+    if(retriable && attempt<4){ await new Promise(s=>setTimeout(s,(attempt+1)*5000)); return gradePageWithRetry(img,attempt+1); }
+    throw e;
+  }
+}
+
 $("goBtn").onclick=async()=>{
   if(!curChild){ alert("请先新建/选择孩子"); return; }
   const btn=$("goBtn");
   if(capMode==="photo"){
     if(!photoList.length){ alert("请先拍照/选择作业照片"); return; }
     btn.disabled=true; btn.textContent="批改中…";
-    // 一张一张批改：每个请求都小而快，避免一次性 6 张超时(Load failed)
-    const pages=[]; const total=photoList.length;
+    // 逐张批改(只批不存)，遇到模型繁忙/网络失败自动重试；最后聚合成一次总分、只存一条记录
+    const total=photoList.length; const results=[]; let failed=0;
     for(let i=0;i<total;i++){
-      $("gradeOut").innerHTML=`<div class="card spin">⏳ 正在批改第 ${i+1}/${total} 页…</div>`+
-        pages.map((p,idx)=>renderGradeHTML(p,`第 ${idx+1} 页`)).join("");
-      try{
-        const body={childId:curChild,image:photoList[i].data,mimeType:photoList[i].mimeType,subject:val("subject"),notes:val("notes")};
-        const d=await (await fetch("/api/grade",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json();
-        if(!d.ok) throw new Error(d.error);
-        pages.push(d.result);
-      }catch(e){ pages.push({subject:val("subject"),total:0,correct:0,wrong:0,questions:[],remediation:["第"+(i+1)+"页批改失败："+e.message]}); }
+      $("gradeOut").innerHTML=`<div class="card spin">⏳ 正在批改第 ${i+1}/${total} 页…（若模型繁忙会自动重试，请耐心等）</div>`;
+      try{ results.push(await gradePageWithRetry(photoList[i])); }
+      catch(e){ failed++; }
     }
-    let h=`<div class="card"><p><b>共批改 ${total} 页</b>，已逐页存档：</p></div>`;
-    pages.forEach((p,idx)=>{ h+=renderGradeHTML(p,`第 ${idx+1} 页`); });
+    if(!results.length){ $("gradeOut").innerHTML='<div class="card err">全部页批改失败，可能是模型繁忙，请过一会再试。</div>'; btn.disabled=false; btn.textContent="开始批改"; return; }
+    // 聚合
+    const sum=k=>results.reduce((s,p)=>s+(Number(p[k])||0),0);
+    const agg={ subject:val("subject"), total:sum("total"), correct:sum("correct"), wrong:sum("wrong"),
+      questions:[].concat(...results.map((p,idx)=>(p.questions||[]).map(q=>({...q,no:`第${idx+1}页·${q.no}`})))),
+      knowledge_gaps:[...new Set([].concat(...results.map(p=>p.knowledge_gaps||[])))],
+      remediation:[...new Set([].concat(...results.map(p=>p.remediation||[])))] };
+    agg.score=`${agg.correct}/${agg.total}`;
+    // 整次存一条汇总记录
+    try{ await fetch("/api/record",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({childId:curChild,source:"photos",pages:results.length,...agg})}); }catch(e){}
+    let h="";
+    if(failed) h+=`<div class="card err">有 ${failed} 页未成功（模型繁忙），本次总分只统计了成功的 ${results.length} 页，可稍后重试。</div>`;
+    h+=renderGradeHTML(agg, `本次作业（共 ${results.length} 页）`);
+    h+='<p class="small" style="text-align:center">✅ 已作为一次成绩存档，去“历史与趋势”看走势。</p>';
     $("gradeOut").innerHTML=h;
   } else {
     if(!videoB64){ alert("请先录制/上传作业视频"); return; }

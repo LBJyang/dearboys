@@ -279,38 +279,33 @@ const server = http.createServer(async (req, res) => {
     // 批改 + 存档（支持单张 image 或多张 images，每张算一页）
     if (req.method === "POST" && u.pathname === "/api/grade") {
       if (!API_KEY) throw new Error("未配置 GEMINI_API_KEY，请编辑 .env");
-      const { childId, image, mimeType, images, subject, notes } = JSON.parse(await readBody(req));
+      const { childId, image, mimeType, subject, notes, store } = JSON.parse(await readBody(req));
       const child = await storage.getChild(childId);
       if (!child) throw new Error("请先选择或创建孩子");
       const meta = { subject, notes, grade: child.grade, age: child.age, country: child.country };
-      // 归一成数组
-      const imgs = (images && images.length) ? images : (image ? [{ data: image, mimeType }] : []);
-
-      // 多张：一次调用、逐页批改、每页存一条
-      if (imgs.length > 1) {
-        const parts = [{ text: multiImageGradePrompt(meta) }];
-        imgs.forEach((im) => parts.push({ inline_data: { mime_type: im.mimeType || "image/jpeg", data: im.data } }));
-        const result = await callGemini(parts);
-        const now = new Date();
-        for (let i = 0; i < (result.pages || []).length; i++) {
-          const p = result.pages[i];
-          await storage.addRecord({
-            id: uid(), childId, date: new Date(now.getTime() + i).toISOString(),
-            subject: p.subject || subject || "", source: "photos", page: p.page ?? i + 1,
-            total: p.total, correct: p.correct, wrong: p.wrong, score: p.score,
-            questions: p.questions || [], knowledge_gaps: p.knowledge_gaps || [], remediation: p.remediation || [],
-          });
-        }
-        return json(res, 200, { ok: true, result });
-      }
-
-      // 单张：原有单页流程
       const parts = [{ text: gradePrompt(meta) }];
-      if (imgs[0]) parts.push({ inline_data: { mime_type: imgs[0].mimeType || "image/jpeg", data: imgs[0].data } });
+      if (image) parts.push({ inline_data: { mime_type: mimeType || "image/jpeg", data: image } });
       const result = await callGemini(parts);
+      // store=false：只批改不入库（多页时由前端聚合后通过 /api/record 存一条）
+      if (store === false) return json(res, 200, { ok: true, result });
       const record = { id: uid(), childId, date: new Date().toISOString(), subject: result.subject || subject || "", ...result };
       await storage.addRecord(record);
       return json(res, 200, { ok: true, result, recordId: record.id });
+    }
+
+    // 存一条汇总记录（一次提交=一条记录=一个总分）
+    if (req.method === "POST" && u.pathname === "/api/record") {
+      const r = JSON.parse(await readBody(req));
+      const child = await storage.getChild(r.childId);
+      if (!child) throw new Error("请先选择或创建孩子");
+      const record = {
+        id: uid(), childId: r.childId, date: new Date().toISOString(),
+        subject: r.subject || "", source: r.source || "photos", pages: r.pages || 1,
+        total: r.total, correct: r.correct, wrong: r.wrong, score: r.score,
+        questions: r.questions || [], knowledge_gaps: r.knowledge_gaps || [], remediation: r.remediation || [],
+      };
+      await storage.addRecord(record);
+      return json(res, 200, { ok: true, recordId: record.id });
     }
 
     // 视频批改：上传 → 分页批改 → 每页存一条记录
