@@ -219,13 +219,21 @@ $("goBtn").onclick=async()=>{
   if(capMode==="photo"){
     if(!photoList.length){ alert("请先拍照/选择作业照片"); return; }
     btn.disabled=true; btn.textContent="批改中…";
-    $("gradeOut").innerHTML=`<div class="card spin">⏳ 正在批改 ${photoList.length} 张并存档…</div>`;
-    try{
-      const body={childId:curChild,images:photoList.map(p=>({data:p.data,mimeType:p.mimeType})),subject:val("subject"),notes:val("notes")};
-      const d=await (await fetch("/api/grade",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json();
-      if(!d.ok) throw new Error(d.error);
-      if(d.result&&d.result.pages) renderPages(d.result,"照片"); else renderGrade(d.result);
-    }catch(e){ $("gradeOut").innerHTML=`<div class="card err">出错：${e.message}</div>`; }
+    // 一张一张批改：每个请求都小而快，避免一次性 6 张超时(Load failed)
+    const pages=[]; const total=photoList.length;
+    for(let i=0;i<total;i++){
+      $("gradeOut").innerHTML=`<div class="card spin">⏳ 正在批改第 ${i+1}/${total} 页…</div>`+
+        pages.map((p,idx)=>renderGradeHTML(p,`第 ${idx+1} 页`)).join("");
+      try{
+        const body={childId:curChild,image:photoList[i].data,mimeType:photoList[i].mimeType,subject:val("subject"),notes:val("notes")};
+        const d=await (await fetch("/api/grade",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json();
+        if(!d.ok) throw new Error(d.error);
+        pages.push(d.result);
+      }catch(e){ pages.push({subject:val("subject"),total:0,correct:0,wrong:0,questions:[],remediation:["第"+(i+1)+"页批改失败："+e.message]}); }
+    }
+    let h=`<div class="card"><p><b>共批改 ${total} 页</b>，已逐页存档：</p></div>`;
+    pages.forEach((p,idx)=>{ h+=renderGradeHTML(p,`第 ${idx+1} 页`); });
+    $("gradeOut").innerHTML=h;
   } else {
     if(!videoB64){ alert("请先录制/上传作业视频"); return; }
     btn.disabled=true; btn.textContent="处理视频中…";
