@@ -177,11 +177,30 @@ document.querySelectorAll(".tab[data-cap]").forEach(t=>t.onclick=()=>{
 const drop=$("drop"), file=$("file");
 let photoList=[]; // [{data, mimeType, url}]
 drop.onclick=()=>file.click();
-const readAsDataURL=f=>new Promise(res=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.readAsDataURL(f); });
+// 上传前在本地压缩：缩到最长边 1600px、JPEG 0.7，顺便把 HEIC 转成 JPEG
+function compressImage(f, maxDim=1600, quality=0.7){
+  return new Promise((resolve)=>{
+    const url=URL.createObjectURL(f); const img=new Image();
+    img.onload=()=>{
+      let w=img.naturalWidth, h=img.naturalHeight;
+      const scale=Math.min(1, maxDim/Math.max(w,h)); w=Math.round(w*scale); h=Math.round(h*scale);
+      const cv=document.createElement("canvas"); cv.width=w; cv.height=h;
+      cv.getContext("2d").drawImage(img,0,0,w,h);
+      URL.revokeObjectURL(url);
+      const dataUrl=cv.toDataURL("image/jpeg",quality);
+      resolve({data:dataUrl.split(",")[1], mimeType:"image/jpeg", url:dataUrl});
+    };
+    img.onerror=()=>{ URL.revokeObjectURL(url); resolve(null); };
+    img.src=url;
+  });
+}
 file.onchange=async()=>{
   const fs=[...file.files]; if(!fs.length) return;
-  photoList = await Promise.all(fs.map(async f=>{ const url=await readAsDataURL(f); return {data:url.split(",")[1], mimeType:f.type, url}; }));
-  $("preview").innerHTML=`<div class="small" style="margin-top:6px">已选 ${photoList.length} 张</div>`+
+  $("preview").innerHTML='<div class="small" style="margin-top:6px">⏳ 正在压缩图片…</div>';
+  const out=await Promise.all(fs.map(f=>compressImage(f)));
+  photoList=out.filter(Boolean);
+  const kb=Math.round(photoList.reduce((s,p)=>s+p.data.length*0.75,0)/1024);
+  $("preview").innerHTML=`<div class="small" style="margin-top:6px">已选 ${photoList.length} 张（压缩后约 ${kb}KB）</div>`+
     photoList.map(p=>`<img src="${p.url}" style="max-height:90px;border-radius:6px;margin:4px 4px 0 0">`).join("");
 };
 
