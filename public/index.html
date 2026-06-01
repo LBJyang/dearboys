@@ -92,8 +92,8 @@
 
       <!-- 照片 -->
       <div id="capPhoto">
-        <div class="drop" id="drop">点击拍照 / 从相册选作业照片
-          <input type="file" id="file" accept="image/*" style="display:none"/><div id="preview"></div></div>
+        <div class="drop" id="drop">点击拍照 / 从相册选作业照片（可多选，每张算一页）
+          <input type="file" id="file" accept="image/*" multiple style="display:none"/><div id="preview"></div></div>
       </div>
       <!-- 视频 -->
       <div id="capVideo" style="display:none">
@@ -170,8 +170,15 @@ document.querySelectorAll(".tab[data-cap]").forEach(t=>t.onclick=()=>{
 });
 
 const drop=$("drop"), file=$("file");
+let photoList=[]; // [{data, mimeType, url}]
 drop.onclick=()=>file.click();
-file.onchange=()=>{ const f=file.files[0]; if(!f)return; const r=new FileReader(); r.onload=()=>{ imageB64=r.result.split(",")[1]; imageMime=f.type; $("preview").innerHTML=`<img src="${r.result}">`; }; r.readAsDataURL(f); };
+const readAsDataURL=f=>new Promise(res=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.readAsDataURL(f); });
+file.onchange=async()=>{
+  const fs=[...file.files]; if(!fs.length) return;
+  photoList = await Promise.all(fs.map(async f=>{ const url=await readAsDataURL(f); return {data:url.split(",")[1], mimeType:f.type, url}; }));
+  $("preview").innerHTML=`<div class="small" style="margin-top:6px">已选 ${photoList.length} 张</div>`+
+    photoList.map(p=>`<img src="${p.url}" style="max-height:90px;border-radius:6px;margin:4px 4px 0 0">`).join("");
+};
 
 const vdrop=$("vdrop"), vfile=$("vfile");
 vdrop.onclick=()=>vfile.click();
@@ -186,13 +193,14 @@ $("goBtn").onclick=async()=>{
   if(!curChild){ alert("请先新建/选择孩子"); return; }
   const btn=$("goBtn");
   if(capMode==="photo"){
-    if(!imageB64){ alert("请先拍照/上传作业照片"); return; }
+    if(!photoList.length){ alert("请先拍照/选择作业照片"); return; }
     btn.disabled=true; btn.textContent="批改中…";
-    $("gradeOut").innerHTML='<div class="card spin">⏳ 正在批改并存档…</div>';
+    $("gradeOut").innerHTML=`<div class="card spin">⏳ 正在批改 ${photoList.length} 张并存档…</div>`;
     try{
-      const d=await (await fetch("/api/grade",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({childId:curChild,image:imageB64,mimeType:imageMime,subject:val("subject"),notes:val("notes")})})).json();
+      const body={childId:curChild,images:photoList.map(p=>({data:p.data,mimeType:p.mimeType})),subject:val("subject"),notes:val("notes")};
+      const d=await (await fetch("/api/grade",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json();
       if(!d.ok) throw new Error(d.error);
-      renderGrade(d.result);
+      if(d.result&&d.result.pages) renderPages(d.result,"照片"); else renderGrade(d.result);
     }catch(e){ $("gradeOut").innerHTML=`<div class="card err">出错：${e.message}</div>`; }
   } else {
     if(!videoB64){ alert("请先录制/上传作业视频"); return; }
@@ -207,11 +215,13 @@ $("goBtn").onclick=async()=>{
   btn.disabled=false; btn.textContent="开始批改";
 };
 
-function renderVideoGrade(r){
-  let h=`<div class="card"><p><b>视频识别出 ${r.pages_detected ?? (r.pages||[]).length} 页作业</b>，已逐页批改并存档：</p></div>`;
+function renderPages(r, label){
+  const n = r.pages_detected ?? (r.pages||[]).length;
+  let h=`<div class="card"><p><b>${label}识别出 ${n} 页作业</b>，已逐页批改并存档：</p></div>`;
   (r.pages||[]).forEach(p=>{ h+=renderGradeHTML(p, `第 ${p.page} 页`); });
   $("gradeOut").innerHTML=h;
 }
+const renderVideoGrade=r=>renderPages(r,"视频");
 
 function renderGradeHTML(r, title){
   let h=`<div class="card">${title?`<h3 style="margin-top:0">${title}</h3>`:""}<div class="stat">

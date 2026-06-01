@@ -104,6 +104,27 @@ function videoGradePrompt({ subject, grade, age, country, notes }) {
 }`;
 }
 
+// --- 多张照片批改提示词（每张=一页）---
+function multiImageGradePrompt({ subject, grade, age, country, notes }) {
+  return `下面是孩子作业的多张照片，按上传顺序每张算【一页】。学生：年级=${grade || "未知"}，年龄=${age || "未知"}，国籍=${country || "未知"}。学科=${subject || "未知"}。家长补充：${notes || "无"}。
+
+要求：
+1. 按图片顺序逐页批改，第 1 张是第 1 页，以此类推。
+2. 批改时先无视学生答案独立算出标准答案，再读学生作答，最后比对。
+3. 知识点用规范、稳定的课标口径命名，方便长期统计。
+4. 若某张太糊看不清，在该页 remediation 里说明"画面不清，建议重拍"。
+
+只输出 JSON（不要 markdown）：
+{
+  "pages_detected": 整数,
+  "pages": [
+    {"page": 页序号, "subject": "学科", "total": 整数, "correct": 整数, "wrong": 整数, "score": "如 5/8",
+     "questions": [{"no":"题号","student_answer":"作答","correct_answer":"标准答案","is_correct":true/false,"knowledge_point":"规范知识点名","error_type":"错题才填","explanation":"错题才填,面向家长"}],
+     "knowledge_gaps": ["薄弱知识点"], "remediation": ["弥补建议"]}
+  ]
+}`;
+}
+
 // --- Files API：上传视频 → 等处理完 → 返回 file_uri ---
 async function uploadVideoToGemini(buffer, mimeType) {
   const up = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${API_KEY}`, {
@@ -225,14 +246,37 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true });
     }
 
-    // 批改 + 存档
+    // 批改 + 存档（支持单张 image 或多张 images，每张算一页）
     if (req.method === "POST" && u.pathname === "/api/grade") {
       if (!API_KEY) throw new Error("未配置 GEMINI_API_KEY，请编辑 .env");
-      const { childId, image, mimeType, subject, notes } = JSON.parse(await readBody(req));
+      const { childId, image, mimeType, images, subject, notes } = JSON.parse(await readBody(req));
       const child = await storage.getChild(childId);
       if (!child) throw new Error("请先选择或创建孩子");
-      const parts = [{ text: gradePrompt({ subject, notes, grade: child.grade, age: child.age, country: child.country }) }];
-      if (image) parts.push({ inline_data: { mime_type: mimeType || "image/jpeg", data: image } });
+      const meta = { subject, notes, grade: child.grade, age: child.age, country: child.country };
+      // 归一成数组
+      const imgs = (images && images.length) ? images : (image ? [{ data: image, mimeType }] : []);
+
+      // 多张：一次调用、逐页批改、每页存一条
+      if (imgs.length > 1) {
+        const parts = [{ text: multiImageGradePrompt(meta) }];
+        imgs.forEach((im) => parts.push({ inline_data: { mime_type: im.mimeType || "image/jpeg", data: im.data } }));
+        const result = await callGemini(parts);
+        const now = new Date();
+        for (let i = 0; i < (result.pages || []).length; i++) {
+          const p = result.pages[i];
+          await storage.addRecord({
+            id: uid(), childId, date: new Date(now.getTime() + i).toISOString(),
+            subject: p.subject || subject || "", source: "photos", page: p.page ?? i + 1,
+            total: p.total, correct: p.correct, wrong: p.wrong, score: p.score,
+            questions: p.questions || [], knowledge_gaps: p.knowledge_gaps || [], remediation: p.remediation || [],
+          });
+        }
+        return json(res, 200, { ok: true, result });
+      }
+
+      // 单张：原有单页流程
+      const parts = [{ text: gradePrompt(meta) }];
+      if (imgs[0]) parts.push({ inline_data: { mime_type: imgs[0].mimeType || "image/jpeg", data: imgs[0].data } });
       const result = await callGemini(parts);
       const record = { id: uid(), childId, date: new Date().toISOString(), subject: result.subject || subject || "", ...result };
       await storage.addRecord(record);
