@@ -109,7 +109,11 @@
 
   <!-- 趋势 -->
   <div id="trendView" style="display:none">
-    <div id="trendOut" class="card"><div class="small">选择孩子后这里显示历次成绩和进步/退步分析。</div></div>
+    <div class="tabs">
+      <div class="tab active" data-period="week">按周比较</div>
+      <div class="tab" data-period="month">按月比较</div>
+    </div>
+    <div id="trendOut" class="card"><div class="small">选择孩子后这里按周期显示正确率和进步/退步分析。</div></div>
   </div>
 </div>
 
@@ -240,21 +244,41 @@ function renderGrade(r){
   $("gradeOut").innerHTML=renderGradeHTML(r,"")+'<p class="small" style="text-align:center">✅ 已存档，去"历史与趋势"看走势。</p>';
 }
 
+let trendPeriod="week";
+document.querySelectorAll(".tab[data-period]").forEach(t=>t.onclick=()=>{
+  trendPeriod=t.dataset.period;
+  document.querySelectorAll(".tab[data-period]").forEach(x=>x.classList.toggle("active",x===t));
+  loadTrend();
+});
+
 async function loadTrend(){
   if(!curChild){ $("trendOut").innerHTML='<div class="small">请先新建/选择孩子。</div>'; return; }
-  $("trendOut").innerHTML='<div class="spin">⏳ 加载历史并分析…</div>';
-  const hist=await (await fetch("/api/history?childId="+curChild)).json();
-  const recs=hist.records||[];
+  const unit = trendPeriod==="month"?"月":"周";
+  $("trendOut").innerHTML='<div class="spin">⏳ 加载并按'+unit+'统计…</div>';
+  const hist=await (await fetch(`/api/history?childId=${curChild}&period=${trendPeriod}`)).json();
+  const recs=hist.records||[]; const st=hist.stats||{};
   if(!recs.length){ $("trendOut").innerHTML='<div class="small">还没有批改记录，先去批改几次作业。</div>'; return; }
-  let h=`<h3>历次成绩（${recs.length} 次）</h3><table><tr><th>日期</th><th>学科</th><th>正确率</th><th>分数</th></tr>`;
-  hist.stats.scoreSeries.forEach(s=>{ h+=`<tr><td>${s.date}</td><td>-</td><td>${s.rate??"-"}%</td><td>${s.correct}/${s.total}</td></tr>`; });
+
+  // 每个周期的总正确率
+  let h=`<h3>各${unit}正确率（共 ${st.periods.length} 个${unit}、${recs.length} 份作业）</h3><table><tr><th>${unit}</th><th>做题数</th><th>正确率</th></tr>`;
+  st.periods.forEach(p=>{ h+=`<tr><td>${p.label}</td><td>${p.total}</td><td>${p.rate??"-"}%</td></tr>`; });
   h+="</table>";
-  if(hist.stats.points.length){ h+=`<h3>各知识点 早期→近期 正确率</h3>`;
-    hist.stats.points.forEach(p=>{ const r=p.recent, e=p.early; const col=(r!=null&&e!=null)?(r>=e?"var(--ok)":"var(--bad)"):"var(--muted)";
-      h+=`<div class="q"><div class="row" style="justify-content:space-between"><span>${p.point}</span><span style="color:${col}">${e??"无"}% → ${r??"无"}%</span></div><div class="bar"><i style="width:${r??0}%;background:${col}"></i></div></div>`; }); }
+
+  // 相邻周期对比（最近 vs 上一）
+  if(st.compare){ const c=st.compare;
+    const oc = (c.latest.rate!=null&&c.prev.rate!=null)?(c.latest.rate>=c.prev.rate?"var(--ok)":"var(--bad)"):"var(--muted)";
+    h+=`<h3>最近一${unit} vs 上一${unit}（总体）</h3>
+      <div class="q"><div class="row" style="justify-content:space-between"><span>${c.prev.label} → ${c.latest.label}</span>
+      <span style="color:${oc}">${c.prev.rate??"无"}% → ${c.latest.rate??"无"}%</span></div></div>`;
+    if(c.points.length){ h+=`<h3>各知识点 上一${unit}→最近一${unit}</h3>`;
+      c.points.forEach(p=>{ const r=p.latest, e=p.prev; const col=(r!=null&&e!=null)?(r>=e?"var(--ok)":"var(--bad)"):"var(--muted)";
+        const note=(r==null||e==null)?'<span class="small">（数据不足）</span>':'';
+        h+=`<div class="q"><div class="row" style="justify-content:space-between"><span>${p.point} ${note}</span><span style="color:${col}">${e??"无"}% → ${r??"无"}%</span></div><div class="bar"><i style="width:${r??0}%;background:${col}"></i></div></div>`; }); }
+  } else { h+=`<p class="small">只有 1 个${unit}的数据，再积累一${unit}就能看出${unit}间进步/退步了。</p>`; }
+
   $("trendOut").innerHTML=h+'<div class="spin">⏳ 生成进步/退步解读…</div>';
   // LLM 趋势解读
-  const t=await (await fetch("/api/trend?childId="+curChild)).json();
+  const t=await (await fetch(`/api/trend?childId=${curChild}&period=${trendPeriod}`)).json();
   if(t.trend){ const v=t.trend.verdict||""; const cls=v.includes("进步")?"v-up":v.includes("退步")?"v-down":"";
     let th=`<h3>趋势解读</h3><div class="verdict ${cls}">${v}</div><p>${t.trend.overall||""}</p>`;
     if((t.trend.by_point||[]).length){ th+="<ul>"+t.trend.by_point.map(b=>`<li><b>${b.point}</b>（${b.trend}）：${b.detail||""}</li>`).join("")+"</ul>"; }

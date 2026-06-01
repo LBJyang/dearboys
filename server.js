@@ -152,40 +152,70 @@ function callGeminiVideo(promptText, fileUri, mimeType) {
 }
 function callGeminiParts(parts) { return callGemini(parts); }
 
-// --- 从历史记录计算趋势统计（纯代码，不靠模型）---
-function computeStats(records) {
-  const sorted = [...records].sort((a, b) => a.date.localeCompare(b.date));
-  const scoreSeries = sorted.map((r) => ({ date: r.date.slice(0, 10), correct: r.correct, total: r.total, rate: r.total ? Math.round((r.correct / r.total) * 100) : null }));
-  // 把所有记录按时间二分：早期 vs 近期，比较每个知识点正确率
-  const half = Math.floor(sorted.length / 2);
-  const buckets = { early: sorted.slice(0, half || 1), recent: sorted.slice(half) };
-  function pointRates(recs) {
-    const m = {};
-    for (const r of recs) for (const q of r.questions || []) {
-      const k = q.knowledge_point; if (!k) continue;
-      m[k] = m[k] || { c: 0, n: 0 };
-      m[k].n++; if (q.is_correct) m[k].c++;
+// --- 按时间周期(周/月)聚合统计：把同一周期内做过的所有题汇总，分知识点算正确率，再比相邻周期 ---
+function periodKey(dateISO, period) {
+  const d = new Date(dateISO);
+  if (period === "month") return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+  // 周：取该日期所在周的周一(UTC)作为标识
+  const dow = (d.getUTCDay() + 6) % 7; // 周一=0
+  const mon = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - dow));
+  return mon.toISOString().slice(0, 10);
+}
+function periodLabel(key, period) {
+  if (period === "month") return key.replace("-", "年") + "月";
+  const d = new Date(key + "T00:00:00Z");
+  return `${d.getUTCMonth() + 1}月${d.getUTCDate()}日那周`;
+}
+const pct = (c, n) => (n ? Math.round((c / n) * 100) : null);
+
+function computeStats(records, period = "week") {
+  // 按周期分组，汇总该周期内所有题目
+  const groups = {};
+  for (const r of records) {
+    const k = periodKey(r.date, period);
+    const g = groups[k] || (groups[k] = { total: 0, correct: 0, points: {} });
+    for (const q of r.questions || []) {
+      g.total++; if (q.is_correct) g.correct++;
+      const kp = q.knowledge_point; if (!kp) continue;
+      const pm = g.points[kp] || (g.points[kp] = { n: 0, c: 0 });
+      pm.n++; if (q.is_correct) pm.c++;
     }
-    return m;
   }
-  const e = pointRates(buckets.early), n = pointRates(buckets.recent);
-  const points = [...new Set([...Object.keys(e), ...Object.keys(n)])].map((k) => ({
-    point: k,
-    early: e[k] ? Math.round((e[k].c / e[k].n) * 100) : null,
-    recent: n[k] ? Math.round((n[k].c / n[k].n) * 100) : null,
-  }));
-  return { count: sorted.length, scoreSeries, points };
+  const keys = Object.keys(groups).sort();
+  const periods = keys.map((k) => ({ key: k, label: periodLabel(k, period), total: groups[k].total, correct: groups[k].correct, rate: pct(groups[k].correct, groups[k].total) }));
+
+  // 比较最近两个周期
+  let compare = null;
+  if (keys.length >= 2) {
+    const pk = keys[keys.length - 2], lk = keys[keys.length - 1];
+    const pv = groups[pk], lt = groups[lk];
+    const pts = [...new Set([...Object.keys(pv.points), ...Object.keys(lt.points)])].map((pt) => ({
+      point: pt,
+      prev: pv.points[pt] ? pct(pv.points[pt].c, pv.points[pt].n) : null,
+      latest: lt.points[pt] ? pct(lt.points[pt].c, lt.points[pt].n) : null,
+    }));
+    compare = {
+      prev: { key: pk, label: periodLabel(pk, period), rate: pct(pv.correct, pv.total), total: pv.total },
+      latest: { key: lk, label: periodLabel(lk, period), rate: pct(lt.correct, lt.total), total: lt.total },
+      points: pts,
+    };
+  }
+  return { period, periods, compare };
 }
 function statsToText(stats) {
-  let t = `共 ${stats.count} 次作业。\n总体正确率序列(按时间)：` +
-    stats.scoreSeries.map((s) => `${s.date}=${s.rate}%`).join(", ") + "\n各知识点 早期→近期 正确率：\n";
-  for (const p of stats.points) {
-    // 只有两期都有数据才算"趋势"；某期无数据要明确标注，避免被误读为退步
-    if (p.early == null || p.recent == null) {
-      const which = p.early == null ? "早期未涉及" : "近期未涉及";
-      t += `- ${p.point}: ${p.early ?? "无数据"}% → ${p.recent ?? "无数据"}%（${which}，数据不足以判断趋势，请勿当作退步/进步）\n`;
+  const unit = stats.period === "month" ? "月" : "周";
+  if (!stats.compare) return `目前只有 ${stats.periods.length} 个${unit}的数据，不足以做${unit}间比较。`;
+  const c = stats.compare;
+  let t = `比较单位：每${unit}。\n`;
+  t += `上一${unit}（${c.prev.label}）：共做 ${c.prev.total} 道题，总正确率 ${c.prev.rate}%\n`;
+  t += `最近一${unit}（${c.latest.label}）：共做 ${c.latest.total} 道题，总正确率 ${c.latest.rate}%\n`;
+  t += `各知识点 上一${unit}→最近一${unit} 正确率：\n`;
+  for (const p of c.points) {
+    if (p.prev == null || p.latest == null) {
+      const which = p.prev == null ? `上一${unit}未涉及` : `最近一${unit}未涉及`;
+      t += `- ${p.point}: ${p.prev ?? "无数据"}% → ${p.latest ?? "无数据"}%（${which}，数据不足，勿判趋势）\n`;
     } else {
-      t += `- ${p.point}: ${p.early}% → ${p.recent}%\n`;
+      t += `- ${p.point}: ${p.prev}% → ${p.latest}%\n`;
     }
   }
   return t;
@@ -316,20 +346,25 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // 历史 + 趋势统计（代码算）
+    // 历史 + 周期统计（代码算）。period=week|month
     if (req.method === "GET" && u.pathname === "/api/history") {
       const childId = u.searchParams.get("childId");
+      const period = u.searchParams.get("period") === "month" ? "month" : "week";
       const recs = await storage.getRecords(childId);
-      return json(res, 200, { ok: true, records: recs, stats: computeStats(recs) });
+      return json(res, 200, { ok: true, records: recs, stats: computeStats(recs, period) });
     }
 
-    // 趋势解读（LLM 生成人话）
+    // 趋势解读（LLM 生成人话），按周/月比较相邻周期
     if (req.method === "GET" && u.pathname === "/api/trend") {
       if (!API_KEY) throw new Error("未配置 GEMINI_API_KEY");
       const childId = u.searchParams.get("childId");
+      const period = u.searchParams.get("period") === "month" ? "month" : "week";
       const recs = await storage.getRecords(childId);
-      if (recs.length < 2) return json(res, 200, { ok: true, trend: null, note: "至少需要 2 次作业才能分析趋势" });
-      const stats = computeStats(recs);
+      const stats = computeStats(recs, period);
+      if (!stats.compare) {
+        const unit = period === "month" ? "月" : "周";
+        return json(res, 200, { ok: true, trend: null, stats, note: `需要至少两个${unit}的作业数据才能比较趋势` });
+      }
       const child = await storage.getChild(childId);
       const trend = await callGemini([{ text: trendPrompt(child || {}, statsToText(stats)) }]);
       return json(res, 200, { ok: true, trend, stats });
